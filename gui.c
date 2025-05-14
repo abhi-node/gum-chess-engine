@@ -806,7 +806,18 @@ void generateLegalMoves(S_BOARD *board, Move *moves, int *moveCount) {
     }
 }
 
+void generateCaptures(S_BOARD *board, Move *moves, int *moveCount) {
+    Move allLegalMoves[256];
+    int legalMoveCount = 0;
 
+    generateLegalMoves(board, allLegalMoves, &legalMoveCount);
+
+    for (int i = 0; i < legalMoveCount; i++) {
+        if (allLegalMoves[i].is_capture) {
+            moves[(*moveCount)++] = allLegalMoves[i];
+        }
+    }
+}
 
 double Evaluate(S_BOARD board) {
     double score = 0;
@@ -893,6 +904,11 @@ static void undoMove(StateInfo st, Move m, S_BOARD *b) {
             b->pieces[A8] = bR;
             b->pieces[D8] = EMPTY;
         }
+    } else if (m.promotion != EMPTY) {
+        int pawnPiece = (m.promotion < bP ? wP : bP);
+        b->pieces[m.from] = pawnPiece;
+        // restore whatever was on 'to' (could be EMPTY or a captured piece)
+        b->pieces[m.to]   = st.captured;
     }
     // --- all other moves (including promotions & captures) ---
     else {
@@ -918,10 +934,30 @@ void orderMoves(Move (*moves)[256], int moveCount, S_BOARD board) {
     }
 }
 
+double Quies(double alpha, double beta, S_BOARD* board) {
+    int val = Evaluate(*board);
+    if (val >= beta)
+        return beta;
+    if (val > alpha)
+        alpha = val;
+    Move legalMoves[256];
+    int moveCount = 0;
+    generateCaptures(board, legalMoves, &moveCount);
+    for (int i = 0; i < moveCount; i++) {
+        StateInfo st = makeMoveUndoable(legalMoves[i], board);
+        double val = -Quies(-beta, -alpha, board);
+        undoMove(st, legalMoves[i], board);
+        if (val >= beta)
+            return beta;
+        if (val > alpha)
+            alpha = val;
+    }
+    return alpha;
+}
+
 double AlphaBetaSearch(int depth, double alpha, double beta, S_BOARD* board, bool isRoot) {
     if (depth == 0)
-        return Evaluate(*board);
-
+        return Quies(alpha, beta, board);
     Move legalMoves[256];
     int moveCount = 0;
     generateLegalMoves(board, legalMoves, &moveCount);
@@ -1177,11 +1213,43 @@ int main(void) {
                     }
 
                     // --- Black’s engine reply ---
+                    // --- Black’s engine reply ---
                     if (moved && board.side == BLACK) {
-                        // run a depth‑3 α–β search (you can adjust depth or bounds)
-                        AlphaBetaSearch(4, -10000.0, 10000.0, &board, true);
-                        Move ai = board.bestMove;
-                        makeMove(ai, &board);
+                        // First, collect all legal replies:
+                        Move legalAI[256];
+                        int  legalCountAI = 0;
+                        generateLegalMoves(&board, legalAI, &legalCountAI);
+
+                        if (legalCountAI > 0) {
+                            // Seed rand() once at startup
+                            AlphaBetaSearch(2, -10.0, 10.0, &board, true);
+
+                            // Grab what the search thought was best:
+                            Move ai = board.bestMove;
+
+                            // Sanity‐check it against the list of generated moves:
+                            bool valid = false;
+                            for (int i = 0; i < legalCountAI; i++) {
+                                if (legalAI[i].from      == ai.from      &&
+                                    legalAI[i].to        == ai.to        &&
+                                    legalAI[i].promotion == ai.promotion &&
+                                    legalAI[i].is_castle_kingside ==
+                                                            ai.is_castle_kingside &&
+                                    legalAI[i].is_castle_queenside ==
+                                                            ai.is_castle_queenside) {
+                                    valid = true;
+                                    break;
+                                }
+                            }
+
+                            // If it wasn’t valid, fall back to a random legal move:
+                            if (!valid) {
+                                ai = legalAI[rand() % legalCountAI];
+                            }
+
+                            // Finally, execute it
+                            makeMove(ai, &board);
+                        }
                     }
 
                     if (moved) {
